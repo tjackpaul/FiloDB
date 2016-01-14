@@ -8,29 +8,21 @@ import filodb.core.store.ColumnStore
 import scala.concurrent.{ExecutionContext, Future}
 
 class CassandraColumnStore(val keySpace: KeySpace, val session: Session)(implicit val ec: ExecutionContext)
-extends ColumnStore
+  extends ColumnStore
   with CassandraChunkStore
   with CassandraSummaryStore
   with CassandraQueryApi {
-
-  override def chunkTable: ChunkTable = new ChunkTable(keySpace, session)
 
   override def summaryTable: SummaryTable = new SummaryTable(keySpace, session)
 
   def initialize: Future[Seq[Response]] = {
     flow.warn(s"Initializing column store")
-    for {
-      c <- chunkTable.initialize()
-      s <- summaryTable.initialize()
-    } yield Seq(c, s)
+    Future sequence Seq(summaryTable.initialize())
   }
 
   def clearAll: Future[Seq[Response]] = {
     flow.warn(s"Removing all data")
-    for {
-      c <- chunkTable.clearAll()
-      s <- summaryTable.clearAll()
-    } yield Seq(c, s)
+    Future sequence Seq(summaryTable.clearAll())
   }
 
 }

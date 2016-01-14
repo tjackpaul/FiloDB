@@ -9,6 +9,7 @@ import filodb.core.query._
 import filodb.core.reprojector.Reprojector
 import filodb.core.reprojector.Reprojector.SegmentFlush
 import filodb.core.store.ColumnStoreSpec.MapColumnStore
+import filodb.util.TimeUUIDUtils
 import org.scalatest.concurrent.ScalaFutures
 import org.scalatest.{BeforeAndAfter, FunSpec, Matchers}
 import org.velvia.filo.TupleRowReader
@@ -87,6 +88,8 @@ object ColumnStoreSpec {
       Future(chunks)
     }
 
+    override protected def deleteProjectionData(projection: Projection): Future[Boolean] = ???
+
   }
 
   trait MapSummaryStore extends SummaryStore {
@@ -146,7 +149,9 @@ object ColumnStoreSpec {
       }
     }
 
-    override def newVersion: SegmentVersion = UUID.randomUUID()
+    override def getNewSegmentVersion: SegmentVersion = TimeUUIDUtils.getUniqueTimeUUIDinMillis
+
+    override def nextChunkId(segment: Any): ChunkId = TimeUUIDUtils.getUniqueTimeUUIDinMillis
   }
 
   trait SimpleQueryApi extends QueryApi {
@@ -199,8 +204,8 @@ class ColumnStoreSpec extends FunSpec with Matchers with BeforeAndAfter with Sca
     it("should NOT allow concurrent flushes to write against the same summary version") {
       import scala.concurrent.ExecutionContext.Implicits.global
       val columnStore = new MapColumnStore()
-      val rows = names.map(TupleRowReader).iterator
-      val partitions = Reprojector.project(projection, rows)
+      val rows = names.map(TupleRowReader)
+      val partitions = Reprojector.project(projection, rows.iterator)
         .toSeq.groupBy(f => f.partition)
 
       partitions.size should be(2)
@@ -209,15 +214,15 @@ class ColumnStoreSpec extends FunSpec with Matchers with BeforeAndAfter with Sca
       checkResults(results)
 
 
-      val rows1 = names2.map(TupleRowReader).iterator
-      val partitions1 = Reprojector.project(projection, rows1)
+      val rows1 = names2.map(TupleRowReader)
+      val partitions1 = Reprojector.project(projection, rows1.iterator)
         .toSeq.groupBy(f => f.partition)
       partitions1.size should be(2)
       val flushes1 = partitions1.values.flatten
       val flush1 = flushes1.head
 
-      val rows2 = names3.map(TupleRowReader).iterator
-      val partitions2 = Reprojector.project(projection, rows2)
+      val rows2 = names3.map(TupleRowReader)
+      val partitions2 = Reprojector.project(projection, rows2.iterator)
         .toSeq.groupBy(f => f.partition)
       partitions2.size should be(2)
       val flushes2 = partitions2.values.flatten
@@ -241,9 +246,9 @@ class ColumnStoreSpec extends FunSpec with Matchers with BeforeAndAfter with Sca
         newSummary2 = s2.withKeys(newChunk2.chunkId, newChunk2.keys)
 
         r1 <- columnStore.compareAndSwapSummaryAndChunk(projection,
-          flush1.partition, flush1.segment, v1, columnStore.newVersion, newChunk1, newSummary1)
+          flush1.partition, flush1.segment, v1, columnStore.getNewSegmentVersion, newChunk1, newSummary1)
         r2 <- columnStore.compareAndSwapSummaryAndChunk(projection,
-          flush2.partition, flush2.segment, v2, columnStore.newVersion, newChunk2, newSummary2)
+          flush2.partition, flush2.segment, v2, columnStore.getNewSegmentVersion, newChunk2, newSummary2)
 
       } yield (r1, r2), 100 seconds)
       result1 should be(true)
@@ -258,8 +263,8 @@ class ColumnStoreSpec extends FunSpec with Matchers with BeforeAndAfter with Sca
     it("should store and read one flush properly") {
       val mapColumnStore = new MapColumnStore()
 
-      val rows = names.map(TupleRowReader).iterator
-      val partitions = Reprojector.project(projection, rows)
+      val rows = names.map(TupleRowReader)
+      val partitions = Reprojector.project(projection, rows.iterator)
         .toSeq.groupBy(f => f.partition)
 
       partitions.size should be(2)
@@ -299,11 +304,11 @@ class ColumnStoreSpec extends FunSpec with Matchers with BeforeAndAfter with Sca
     it("should store and read data from multiples flushes properly with overrides") {
       val mapColumnStore = new MapColumnStore()
 
-      val rows = names.map(TupleRowReader).iterator
-      val rows2 = names2.map(TupleRowReader).iterator
-      val partitions = Reprojector.project(projection, rows)
+      val rows = names.map(TupleRowReader)
+      val rows2 = names2.map(TupleRowReader)
+      val partitions = Reprojector.project(projection, rows.iterator)
         .toSeq.groupBy(f => f.partition)
-      val partitions2 = Reprojector.project(projection, rows2)
+      val partitions2 = Reprojector.project(projection, rows2.iterator)
         .toSeq.groupBy(f => f.partition)
       partitions.size should be(2)
       partitions2.size should be(2)

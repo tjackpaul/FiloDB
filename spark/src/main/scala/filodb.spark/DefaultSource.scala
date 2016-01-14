@@ -45,9 +45,8 @@ class DefaultSource extends RelationProvider with CreatableRelationProvider {
                      data: DataFrame): BaseRelation = {
     val dataset = parameters.getOrElse("dataset", sys.error("'dataset' must be specified for FiloDB."))
     val version = parameters.getOrElse("version", "0").toInt
-    val flushSize = parameters.getOrElse("flush-size", "1000").toInt
     val filoConfig = configFromSpark(sqlContext.sparkContext)
-    sqlContext.saveAsFiloDataset(data, dataset, flushSize)
+    sqlContext.saveAsFiloDataset(data, dataset, parameters,mode)
     FiloRelation(dataset, filoConfig, version)(sqlContext)
   }
 }

@@ -40,6 +40,8 @@ trait MetaStore {
    * @return a Schema, column name -> Column definition, or ErrorResponse
    */
   def getSchema(dataset: String): Future[Seq[Column]]
+
+  def deleteDataset(dataset:String,projectionId:Option[Int]=None):Future[Boolean]
 }
 
 /**

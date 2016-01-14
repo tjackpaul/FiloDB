@@ -1,29 +1,31 @@
 package filodb
 
 import com.typesafe.config.{Config, ConfigFactory}
-import filodb.coordinator.reactive.StreamingProcessor
 import filodb.core.metadata.{Column, Projection}
 import filodb.core.reprojector.Reprojector
-import org.apache.spark.SparkContext
 import org.apache.spark.sql.types.DataType
 import org.apache.spark.sql.{DataFrame, Row, SQLContext, SaveMode}
+import org.apache.spark.{SparkContext, TaskContext}
 import org.velvia.filo.RowReader
-
-import scala.concurrent.Future
 
 
 package spark {
 
 case class DatasetNotFound(dataset: String) extends Exception(s"Dataset $dataset not found")
 
+case class DatasetAlreadyExists(dataset: String) extends Exception(s"Existing Dataset $dataset found")
+
 // For each mismatch: the column name, DataFrame type, and existing column type
 case class ColumnTypeMismatch(mismatches: Set[(String, DataType, Column.ColumnType)]) extends Exception
 
-case class NoSortColumn(name: String) extends Exception(s"No sort column found $name")
+case class NoSegmentColumn(name: String) extends Exception(s"No segment columns specified for $name")
 
-case class NoPartitionColumn(name: String) extends Exception(s"No partition column found $name")
+case class NoPrimaryColumn(name: String) extends Exception(s"No primary key columns specified for $name")
 
 case class BadSchemaError(reason: String) extends Exception(reason)
+
+case class UnsupportedColumnType(name: String, dataType: DataType)
+  extends Exception(s"$dataType of column $name is unsupported")
 
 }
 
@@ -46,48 +48,41 @@ package object spark {
 
     def saveAsFiloDataset(df: DataFrame,
                           dataset: String,
-                          flushSize: Int = 1000,
+                          parameters: Map[String, String] = Map.empty[String, String],
                           mode: SaveMode = SaveMode.Append): Unit = {
+      val flushSize = parameters.getOrElse("flush-size", "10000").toInt
+
       val filoConfig = configFromSpark(sqlContext.sparkContext)
       Filo.init(filoConfig)
-      val datasetObj = Filo.getDatasetObj(dataset)
       val namesTypes = df.schema.map { f => f.name -> f.dataType }
-      val schema = datasetObj.schema.map(col => col.name -> col)
+      val ds = Filo.getDatasetObj(dataset).getOrElse(throw DatasetNotFound(dataset))
+      val schema = ds.schema.map(col => col.name -> col)
       validateSchema(namesTypes, schema)
+
       val schemaMap = schema.toMap
       val dfOrderSchema = namesTypes.map { case (colName, x) =>
         schemaMap(colName)
       }
       // for each of the projections
-      datasetObj.projections.map { projection =>
-        // For each partition, start the ingestion
-        df.rdd.mapPartitions { rowIter =>
-          Filo.init(filoConfig)
-          ingest(flushSize, projection, rowIter, dfOrderSchema)
-          Iterator.empty
-        }.count()
-
+      ds.projections.map { projection =>
+        val tableWriter = TableWriter(flushSize, projection, dfOrderSchema)
+        df.rdd.sparkContext.runJob(df.rdd, tableWriter.ingest _)
       }
     }
 
-    private def ingest(flushSize: Int, projection: Projection, rowIter: Iterator[Row], dfOrderSchema: Seq[Column]) = {
-      implicit val executionContext = Filo.executionContext
-
-      def save(rows: Iterator[Row]) = Filo.parse(
-        Future sequence Reprojector.project(projection,
-          new RowIterator(rows),
-          Some(dfOrderSchema)
-        ).map { flush =>
-          Filo.columnStore.flushToSegment(flush)
-        })(r => r)
-
-      val rowProcessorProps = StreamingProcessor.props[Row, Iterator[Boolean]](
-        rowIter, save, Filo.memoryCheck(512))
-
-      val rowProcessor = Filo.newActor(rowProcessorProps)
-      StreamingProcessor.start(rowProcessor)
+    case class TableWriter(flushSize: Int, projection: Projection, dfOrderSchema: Seq[Column]) {
+      def ingest(taskContext: TaskContext, rowIter: Iterator[Row]):Unit = {
+        implicit val executionContext = Filo.executionContext
+        rowIter.grouped(flushSize).foreach { rows =>
+          val flushes = Reprojector.project(projection,
+            new RowIterator(rows.iterator)
+            , Some(dfOrderSchema))
+          flushes.foreach { flush =>
+            Filo.parse(Filo.columnStore.flushToSegment(flush, false))(r => r)
+          }
+        }
+      }
     }
-
 
     class RowIterator(iterator: Iterator[Row]) extends Iterator[RowReader] {
       val rowReader = new RddRowReader
@@ -95,7 +90,7 @@ package object spark {
       override def hasNext: Boolean = iterator.hasNext
 
       override def next(): RowReader = {
-        rowReader.row = iterator.next
+        rowReader.row = iterator.next()
         rowReader
       }
     }

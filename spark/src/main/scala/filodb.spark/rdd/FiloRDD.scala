@@ -6,6 +6,7 @@ import com.typesafe.config.Config
 import filodb.core.Types._
 import filodb.core.metadata.{KeyRange, Projection}
 import filodb.core.query.{Dataflow, ScanInfo, ScanSplit}
+import filodb.core.util.FiloLogging
 import filodb.spark.{Filo, SparkRowReader}
 import org.apache.spark.annotation.DeveloperApi
 import org.apache.spark.rdd.RDD
@@ -25,7 +26,7 @@ class FiloRDD(@transient val sc: SparkContext,
               columns: Seq[ColumnId],
               partition: Option[Any] = None,
               segmentRange: Option[KeyRange[_]] = None
-               ) extends RDD[Row](sc, Seq.empty) {
+               ) extends RDD[Row](sc, Seq.empty) with FiloLogging {
 
   @DeveloperApi
   override def compute(split: Partition, context: TaskContext): Iterator[Row] = {
@@ -33,7 +34,12 @@ class FiloRDD(@transient val sc: SparkContext,
     val partition = split.asInstanceOf[FiloPartition]
     val scans = partition.scans
     val segmentScans = scans.iterator.flatMap(readSegments)
-    val sparkRows = segmentScans.map(f => f.map(r => r.asInstanceOf[SparkRowReader]))
+    val sparkRows = segmentScans.map { f =>
+      flow.debug(s"Scanning $f")
+      f.map { r =>
+        r.asInstanceOf[SparkRowReader]
+      }
+    }
     sparkRows.flatten
   }
 
@@ -44,7 +50,10 @@ class FiloRDD(@transient val sc: SparkContext,
     implicit val rowReaderFactory: Dataflow.RowReaderFactory =
       (chunks: Array[ByteBuffer], classes: Array[Class[_]])
       => new SparkRowReader(chunks: Array[ByteBuffer], classes: Array[Class[_]])
-    Filo.parse(Filo.columnStore.readSegments(scanInfo))(f => f.iterator)
+    Filo.parse(Filo.columnStore.readSegments(scanInfo)) { f =>
+      f.foreach(f => flow.debug(f.toString()))
+      f.iterator
+    }
   }
 
   override protected def getPartitions: Array[Partition] = {

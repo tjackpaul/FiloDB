@@ -18,7 +18,7 @@ class MapDBMemTableSpec extends FunSpec with Matchers with BeforeAndAfter with S
       val mTable = new MapDBMemTable(projection,projection.schema)
       mTable.numRows should be(0)
 
-      mTable.ingestRows(names.map(TupleRowReader))
+      mTable.ingestRows(names.map(TupleRowReader).toSeq)
       mTable.numRows should equal(6)
 
       val outRows = mTable.readRows("US", keyRange)
@@ -27,8 +27,8 @@ class MapDBMemTableSpec extends FunSpec with Matchers with BeforeAndAfter with S
 
     it("should replace rows and read them back in order or key") {
       val mTable = new MapDBMemTable(projection,projection.schema)
-      mTable.ingestRows(names.take(4).map(TupleRowReader))
-      mTable.ingestRows(names.take(2).map(TupleRowReader))
+      mTable.ingestRows(names.take(4).map(TupleRowReader).toSeq)
+      mTable.ingestRows(names.take(2).map(TupleRowReader).toSeq)
       mTable.numRows should equal(4)
 
       val outRows = mTable.readAllRows().map(_._3)
@@ -40,7 +40,7 @@ class MapDBMemTableSpec extends FunSpec with Matchers with BeforeAndAfter with S
   describe("removeRows") {
     it("should be able to delete rows") {
       val mTable = new MapDBMemTable(projection,projection.schema)
-      mTable.ingestRows(names.map(TupleRowReader))
+      mTable.ingestRows(names.map(TupleRowReader).toSeq)
 
       mTable.removeRows("US", keyRange)
       mTable.numRows should equal(3)

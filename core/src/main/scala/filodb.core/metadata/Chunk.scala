@@ -2,10 +2,12 @@ package filodb.core.metadata
 
 import java.io.{DataInputStream, DataOutputStream}
 import java.nio.ByteBuffer
+import java.util.UUID
 
 import filodb.core.KeyType
 import filodb.core.Types._
 import filodb.core.util.{ByteBufferOutputStream, FiloLogging}
+import filodb.util.TimeUUIDUtils
 import it.unimi.dsi.io.ByteBufferInputStream
 import scodec.bits.ByteVector
 
@@ -39,7 +41,7 @@ trait ChunkWithMeta extends ChunkWithId {
 
   def metaDataByteSize: Int =
     4 + chunkOverrides.fold(0)(f =>
-      f.map { case (cid, seq) => seq.length }.sum
+      f.map { case (cid, seq) => 16 + 4 + seq.length * 4 }.sum
     ) + 100
 
   def keySize(keyType: KeyType): Int = {
@@ -71,7 +73,7 @@ object SimpleChunk extends FiloLogging {
         overrides.foreach { case (cid, positions) =>
           val posLength = positions.length
           metrics.debug(s"Chunk Metadata writing $posLength overridden positions for $cid")
-          os.writeInt(cid)
+          os.write(TimeUUIDUtils.asByteArray(cid))
           os.writeInt(posLength)
           if (positions.nonEmpty) positions.foreach(os.writeInt)
         }
@@ -120,7 +122,9 @@ object SimpleChunk extends FiloLogging {
     val length = in.readInt()
     val overrides = if (length > 0) {
       val chunks = (0 until length).map { i =>
-        val chunkId = in.readInt()
+        val bytes = new Array[Byte](16)
+        in.read(bytes)
+        val chunkId = TimeUUIDUtils.toUUID(bytes)
         val rowIdLength = in.readInt()
         val rowIds = (0 until rowIdLength).map(j => in.readInt()).toSeq
         chunkId -> rowIds

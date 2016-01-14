@@ -4,6 +4,7 @@ import java.nio.ByteBuffer
 
 import filodb.core.metadata._
 import filodb.core.reprojector.Reprojector.SegmentFlush
+import filodb.core.util.FiloLogging
 import org.velvia.filo.BuilderEncoder.{AutoDetect, EncodingHint}
 import org.velvia.filo.{RowReader, RowToVectorBuilder, VectorInfo}
 
@@ -17,7 +18,9 @@ trait Reprojector extends Serializable {
               rowSchema: Option[Seq[Column]] = None): Iterator[SegmentFlush]
 }
 
-object Reprojector extends Reprojector {
+object Reprojector extends Reprojector with FiloLogging {
+
+  import filodb.core.util.Iterators._
 
   case class SegmentFlush(projection: Projection,
                           partition: Any,
@@ -29,12 +32,10 @@ object Reprojector extends Reprojector {
   override def project(projection: Projection,
                        rows: Iterator[RowReader],
                        passedSchema: Option[Seq[Column]] = None): Iterator[SegmentFlush] = {
-
     val rowSchema = passedSchema.getOrElse(projection.schema)
     val columnIndexes = rowSchema.zipWithIndex.map { case (col, i) => col.name -> i }.toMap
     val keyFunction = projection.keyFunction(columnIndexes)
     val partitionFunction = projection.partitionFunction(columnIndexes)
-    import filodb.core.util.Iterators._
     // group rows by partition
     val partitionedRows = rows.sortedGroupBy(partitionFunction)
     partitionedRows.flatMap { case (partitionKey, partRows) =>
@@ -47,8 +48,11 @@ object Reprojector extends Reprojector {
         val (keys, columnVectorMap) = buildFromRows(keyFunction,
           segmentRowsIter,
           Projection.toFiloSchema(rowSchema))
+        val keyLength = keys.length
         val columnVectors = new Array[ByteBuffer](projection.schema.length)
         projection.schema.zipWithIndex.foreach { case (c, i) => columnVectors(i) = columnVectorMap(c.name) }
+        flow.debug(s"Re projection flush " +
+          s"with $keyLength rows with partition $partitionKey and segment $segment")
         SegmentFlush(projection, partitionKey, segment, keys, columnVectors)
       }
       segmentChunks

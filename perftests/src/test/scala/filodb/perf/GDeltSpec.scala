@@ -97,16 +97,23 @@ class GDeltSpec extends CassandraTest {
 
   val dataset = Dataset("gdelt", gdeltSchema, "Year", "GLOBALEVENTID", "MonthYear")
   implicit val ec = Filo.executionContext
-
+  val loader = Thread.currentThread().getContextClassLoader()
 
   it("should write gdelt csv to a Filo table and read from it") {
-    val gdeltFile = "GDELT-1979-1984-100000.csv"
+    val res = loader.getResource("GDELT-1979-1984-100000.csv").getPath
     val gdelt = sql.read.format("com.databricks.spark.csv")
-      .option("path", gdeltFile)
+      .option("path", res)
       .option("header", "true")
       .option("inferSchema", "true")
       .load()
+    println(gdelt.count())
     sql.saveAsFiloDataset(gdelt, "gdelt")
+    val orders = sql.read.format("filodb.spark")
+      .option("dataset", "gdelt").load()
+    orders.registerTempTable("gdelt")
 
+    val df = sql.sql("SELECT * FROM gdelt")
+    println(df.count)
+    df.count should be(gdelt.count)
   }
 }

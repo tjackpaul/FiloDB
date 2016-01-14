@@ -16,7 +16,7 @@ with BeforeAndAfterAll {
 
   val port = "9142"
 
-  private[this] val connector = Defaults.defaultConnector
+  private[this] lazy val connector = Defaults.defaultConnector
 
   implicit lazy val keySpace: KeySpace = KeySpace(Defaults.keySpaceString)
 

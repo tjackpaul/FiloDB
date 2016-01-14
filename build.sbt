@@ -51,7 +51,10 @@ lazy val spark = (project in file("spark"))
                    .settings(assemblySettings:_*)
                    .settings(assemblyExcludedJars in assembly := { val cp = (fullClasspath
                      in assembly).value
-                     val excludesJar = Seq("logback-classic-1.1.2.jar")
+                     val excludesJar = Seq(
+                       "logback-classic-1.1.3.jar",
+                       "log4j-over-slf4j-1.7.12.jar"
+                     )
                      cp filter { jar => excludesJar.contains(jar.data.getName)}
                    })
                    .settings(assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = true))
@@ -65,7 +68,7 @@ lazy val perfTests = (project in file("perftests"))
                    .settings(libraryDependencies ++= perfDeps)
                    .dependsOn(core, coordinator, cassandra, spark % "compile->compile; test->test")
 
-val phantomVersion = "1.12.2"
+val phantomVersion = "1.20.0"
 val akkaVersion    = "2.3.7"
 
 lazy val extraRepos = Seq(
@@ -101,8 +104,8 @@ lazy val cassDeps = Seq(
   "com.websudos"                  %% "phantom-dsl"              % phantomVersion,
   "com.fasterxml.jackson.core"    % "jackson-databind"          % "2.4.1.1",
   "com.fasterxml.jackson.module"  % "jackson-module-scala_2.10" % "2.4.1",
-  "org.cassandraunit"             % "cassandra-unit"            % "2.0.2.2"       % "test",
-  "com.websudos"                  %% "phantom-testkit"          % phantomVersion  % "test" excludeAll(excludeZK)
+  "com.typesafe"                  % "config"                    % "1.2.1",
+  "org.cassandraunit"             % "cassandra-unit"            % "2.0.2.2"       % "test"
 )
 
 lazy val coordDeps = Seq(

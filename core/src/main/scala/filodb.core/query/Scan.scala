@@ -43,17 +43,16 @@ class SegmentScan(val segment: Segment,
 
 
   private def buildAccessTable() = {
-    val chunkAccessTable: Array[(ChunkId, FiloRowReader)] = new Array(numChunks)
+    val chunkAccessTable = new Array[(ChunkId, FiloRowReader)](numChunks)
     chunks.zipWithIndex.foreach { case (chunk, j) =>
-      chunkAccessTable(j) = (chunk.chunkId,
-        rowReaderFactory(chunk.columnVectors, classes))
+      chunkAccessTable(j) = (chunk.chunkId, rowReaderFactory(chunk.columnVectors, classes))
     }
     chunkAccessTable
   }
 
   private def buildOverrideIndex() = {
     val overrideIndex = new mutable.HashMap[Int, mutable.Set[Int]]() with mutable.MultiMap[Int, Int]
-    val allOverrides = chunks.map(_.chunkOverrides).collect { case Some(x) => x }.flatten.zipWithIndex
+    val allOverrides = chunks.reverse.map(_.chunkOverrides).collect { case Some(x) => x }.flatten.zipWithIndex
     allOverrides.foreach { case ((chunkId, keys), i) => keys.foreach(overrideIndex.addBinding(i, _)) }
     overrideIndex
   }
@@ -124,5 +123,9 @@ class SegmentScan(val segment: Segment,
     chunkAccessTable(chunkNum)._2.rowNo = rowOffset
     chunkAccessTable(chunkNum)._2
 
+  }
+
+  override def toString():String={
+    s" Scan for ${segment} with chunks ${chunks}"
   }
 }

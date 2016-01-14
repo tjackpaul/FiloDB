@@ -2,7 +2,8 @@ package filodb.cassandra.metastore
 
 import com.datastax.driver.core.Session
 import com.websudos.phantom.connectors.KeySpace
-import filodb.core.Messages.{Response, Success}
+import filodb.cassandra.columnstore.ChunkTable
+import filodb.core.Messages.{NotApplied, Response, Success}
 import filodb.core.metadata.Column
 import filodb.core.store.{Dataset, MetaStore, ProjectionInfo}
 import filodb.core.util.FiloLogging
@@ -49,9 +50,16 @@ with FiloLogging {
     flow.debug(s"Creating projection $projectionInfo")
     for {
       inserted <- projectionTable.insertProjection(projectionInfo)
-      result = inserted match {
+      created <- inserted match {
+        case Success =>
+          val chunkTable = new ChunkTable(keySpace, session, projectionInfo.dataset, projectionInfo.id)
+          chunkTable.initialize()
+        case _ => Future(NotApplied)
+      }
+      result = created match {
         case Success => true
         case _ => false
+
       }
     } yield result
   }
@@ -69,5 +77,16 @@ with FiloLogging {
 
   override def getProjection(name: String, projectionId: Int): Future[ProjectionInfo] = {
     projectionTable.getProjection(name, projectionId)
+  }
+
+  override def deleteDataset(dataset: String, projectionId: Option[Int]): Future[Boolean] = {
+    flow.debug(s"Deleting dataset $dataset and projection $projectionId")
+    for {
+      deleted <- projectionTable.deleteDataset(dataset, projectionId)
+      result = deleted match {
+        case Success => true
+        case _ => false
+      }
+    } yield result
   }
 }

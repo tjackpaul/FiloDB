@@ -2,10 +2,12 @@ package filodb.core.metadata
 
 import java.io._
 import java.nio.ByteBuffer
+import java.util.UUID
 
 import filodb.core.KeyType
 import filodb.core.Types._
 import filodb.core.util.ByteBufferOutputStream
+import filodb.util.TimeUUIDUtils
 import it.unimi.dsi.io.ByteBufferInputStream
 import scodec.bits.ByteVector
 
@@ -25,8 +27,6 @@ import scala.collection.mutable.ArrayBuffer
  *
  */
 trait SegmentSummary {
-
-  def nextChunkId: ChunkId = numChunks
 
   def numChunks: Int = chunkSummaries.fold(0)(seq => seq.length)
 
@@ -58,7 +58,7 @@ trait SegmentSummary {
   def size: Int = {
     // summaries size + chunkSummaries X chunkId + summary size
     val summariesSize =
-      chunkSummaries.fold(0)(_.map { case (cid, summary) => 4 + summary.size }.sum)
+      chunkSummaries.fold(0)(_.map { case (cid, summary) => 16 + summary.size }.sum)
     4 + summariesSize + 100
   }
 
@@ -70,7 +70,9 @@ object SegmentSummary {
     val length = in.readInt()
     if (length > 0) {
       val chunkSummaries = (0 until length).map { i =>
-        val chunkId = in.readInt()
+        val bytes = new Array[Byte](16)
+        in.read(bytes)
+        val chunkId = TimeUUIDUtils.toUUID(bytes)
         val chunkSummary = ChunkSummary.read(in, keyType)
         (chunkId, chunkSummary)
       }
@@ -80,17 +82,16 @@ object SegmentSummary {
     }
   }
 
-  def write(byteBuffer: ByteBuffer,segmentSummary:SegmentSummary): Unit = {
+  def write(byteBuffer: ByteBuffer, segmentSummary: SegmentSummary): Unit = {
     val baos = new ByteBufferOutputStream(byteBuffer)
     val os = new DataOutputStream(baos)
     segmentSummary.chunkSummaries match {
-      case Some(summaries) => {
+      case Some(summaries) =>
         os.writeInt(summaries.length)
         summaries.foreach { case (cid, summary) =>
-          os.writeInt(cid)
+          os.write(TimeUUIDUtils.asByteArray(cid))
           summary.write(os)
         }
-      }
       case None => os.writeInt(0)
     }
     os.flush()

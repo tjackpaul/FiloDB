@@ -13,6 +13,8 @@ import filodb.core.Messages.Response
 import filodb.core.Types.ChunkId
 import filodb.core.metadata.{KeyRange, Projection}
 import filodb.core.query.{PartitionScanInfo, ScanInfo, SegmentedPartitionScanInfo}
+import filodb.core.util.FiloLogging
+import shapeless.HNil
 
 import scala.concurrent.Future
 
@@ -21,28 +23,29 @@ import scala.concurrent.Future
  * Each row stores data for a column (chunk) of a segment.
  *
  */
-sealed class ChunkTable(ks: KeySpace, _session: Session)
-  extends CassandraTable[ChunkTable, (String, Int, String, ByteBuffer)] {
+sealed class ChunkTable(ks: KeySpace, _session: Session, val dataset: String, val projectionId: Int)
+  extends CassandraTable[ChunkTable, (String, ChunkId, String, ByteBuffer)]
+  with FiloLogging {
 
 
   import filodb.cassandra.Util._
 
+  import scala.language.postfixOps
+
   implicit val keySpace = ks
   implicit val session = _session
+
+  override val tableName = dataset + projectionId + "_chunks"
 
   //scalastyle:off
 
   object partition extends BlobColumn(this) with PartitionKey[ByteBuffer]
 
-  object dataset extends StringColumn(this) with PrimaryKey[String]
+  object columnName extends StringColumn(this) with ClusteringOrder[String]
 
-  object projectionId extends IntColumn(this) with PrimaryKey[Int]
+  object segmentId extends StringColumn(this) with ClusteringOrder[String]
 
-  object columnName extends StringColumn(this) with PrimaryKey[String]
-
-  object segmentId extends StringColumn(this) with PrimaryKey[String]
-
-  object chunkId extends IntColumn(this) with PrimaryKey[Int]
+  object chunkId extends TimeUUIDColumn(this) with ClusteringOrder[UUID]
 
   object data extends BlobColumn(this)
 
@@ -54,20 +57,19 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
 
   def writeChunks(projection: Projection,
                   partition: ByteBuffer,
-                  columnNames: Seq[String],
                   segmentId: String,
                   chunkId: ChunkId,
-                  chunks: Seq[ByteBuffer]): Future[Response] = {
-    val insertQ = insert.value(_.dataset, projection.dataset)
-      .value(_.projectionId, projection.id)
-      .value(_.partition, partition)
+                  columnNames: Seq[String],
+                  columnVectors: Seq[ByteBuffer]): Future[Response] = {
+    flow.debug(s"Writing chunk with segment $segmentId and chunk $chunkId")
+    val insertQ = insert.value(_.partition, partition)
       .value(_.segmentId, segmentId)
       .value(_.chunkId, chunkId)
     // NOTE: This is actually a good use of Unlogged Batch, because all of the inserts
     // are to the same partition key, so they will get collapsed down into one insert
     // for efficiency.
     // NOTE2: the batch add is immutable, so use foldLeft to get the updated batch
-    val batchQuery = chunks.zipWithIndex.foldLeft(Batch.unlogged) {
+    val batchQuery = columnVectors.zipWithIndex.foldLeft(Batch.unlogged) {
       case (batch, (bytes, i)) =>
         val columnName = columnNames(i)
         batch.add(insertQ.value(_.columnName, columnName)
@@ -77,7 +79,7 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
   }
 
   def getDataBySegmentAndChunk(scanInfo: ScanInfo,
-                               columnName: String): Future[Map[(ByteBuffer, String, Int), ByteBuffer]] = {
+                               columnName: String): Future[Map[(ByteBuffer, String, ChunkId), ByteBuffer]] = {
     for {
       result <- getChunkData(scanInfo, columnName)
       // there would be a unique combination of segmentId and chunkId.
@@ -87,7 +89,7 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
   }
 
   def getChunkData(scanInfo: ScanInfo,
-                   columnName: String): Future[Seq[(ByteBuffer, String, Int, ByteBuffer)]] = {
+                   columnName: String): Future[Seq[(ByteBuffer, String, UUID, ByteBuffer)]] = {
 
     scanInfo match {
 
@@ -96,38 +98,34 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
         val pk = pType.toBytes(partition.asInstanceOf[pType.T])._2.toByteBuffer
         select(_.partition, _.segmentId, _.chunkId, _.data)
           .where(_.partition eqs pk)
-          .and(_.dataset eqs projection.dataset)
-          .and(_.projectionId eqs projection.id)
-          .and(_.columnName eqs columnName).fetch()
+          .and(_.columnName eqs columnName)
+          .fetch()
 
       case SegmentedPartitionScanInfo(projection, c, partition, segmentRange) =>
         val pType = projection.partitionType
         val pk = pType.toBytes(partition.asInstanceOf[pType.T])._2.toByteBuffer
         var query = select(_.partition, _.segmentId, _.chunkId, _.data)
           .where(_.partition eqs pk)
-          .and(_.dataset eqs projection.dataset)
-          .and(_.projectionId eqs projection.id)
           .and(_.columnName eqs columnName)
         query = appendSegmentRange(segmentRange, query)
-        query.fetch()
+        query
+          .fetch()
 
       case TokenRangeScanInfo(projection, c, tokenRange) =>
         select(_.partition, _.segmentId, _.chunkId, _.data)
           .where(t => TokenRangeClause.tokenGt(t.partition.name, tokenRange.start))
           .and(t => TokenRangeClause.tokenLte(t.partition.name, tokenRange.end))
-          .and(_.dataset eqs projection.dataset)
-          .and(_.projectionId eqs projection.id)
-          .and(_.columnName eqs columnName).allowFiltering().fetch()
+          .and(_.columnName eqs columnName)
+          .allowFiltering().fetch()
 
       case SegmentedTokenRangeScanInfo(projection, c, tokenRange, segmentRange) =>
         var query = select(_.partition, _.segmentId, _.chunkId, _.data)
           .where(t => TokenRangeClause.tokenGt(t.partition.name, tokenRange.start))
           .and(t => TokenRangeClause.tokenLte(t.partition.name, tokenRange.end))
-          .and(_.dataset eqs projection.dataset)
-          .and(_.projectionId eqs projection.id)
           .and(_.columnName eqs columnName)
         query = appendSegmentRange(segmentRange, query)
-        query.allowFiltering().fetch()
+        query
+          .allowFiltering().fetch()
     }
   }
 
@@ -138,7 +136,7 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
                                    Unlimited,
                                    Unordered,
                                    Unspecified,
-                                   Chainned]) = {
+                                   Chainned, HNil]) = {
     val start =
       if (segmentRange.start.isDefined) {
         if (segmentRange.startExclusive) {
@@ -168,17 +166,15 @@ sealed class ChunkTable(ks: KeySpace, _session: Session)
                     partition: ByteBuffer,
                     columnName: String,
                     segmentId: String,
-                    chunkIds: List[Int]): Future[Seq[(ChunkId, ByteBuffer)]] =
+                    chunkIds: List[ChunkId]): Future[Seq[(ChunkId, ByteBuffer)]] =
     select(_.chunkId, _.data)
-      .where(_.dataset eqs projection.dataset)
-      .and(_.projectionId eqs projection.id)
-      .and(_.partition eqs partition)
+      .where(_.partition eqs partition)
       .and(_.columnName eqs columnName)
       .and(_.segmentId eqs segmentId)
       .and(_.chunkId in chunkIds).fetch()
 
 
-  override def fromRow(r: Row): (String, Int, String, ByteBuffer) = {
+  override def fromRow(r: Row): (String, ChunkId, String, ByteBuffer) = {
     (segmentId(r), chunkId(r), columnName(r), data(r))
   }
 }

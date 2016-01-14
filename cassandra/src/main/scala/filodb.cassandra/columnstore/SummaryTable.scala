@@ -14,7 +14,7 @@ import scala.concurrent.Future
 
 sealed class SummaryTable(ks: KeySpace, _session: Session)
   extends CassandraTable[SummaryTable, (String, java.util.UUID, ByteBuffer)]
-  with MemoryPool with FiloLogging{
+  with MemoryPool with FiloLogging {
 
 
   import filodb.cassandra.Util._
@@ -60,7 +60,7 @@ sealed class SummaryTable(ks: KeySpace, _session: Session)
                            segmentId: String,
                            oldVersion: Option[java.util.UUID],
                            segmentVersion: java.util.UUID,
-                           segmentSummary: SegmentSummary): Future[Response] = {
+                           segmentSummary: ByteBuffer): Future[Response] = {
     oldVersion match {
       case None =>
         insertSummary(projection, partition, segmentId, segmentVersion, segmentSummary)
@@ -74,43 +74,31 @@ sealed class SummaryTable(ks: KeySpace, _session: Session)
                     segmentId: String,
                     oldVersion: java.util.UUID,
                     newVersion: java.util.UUID,
-                    segmentSummary: SegmentSummary): Future[Response] = {
-    val segmentSummarySize = segmentSummary.size
-    metrics.debug(s"Acquiring buffer of size $segmentSummarySize for SegmentSummary")
-    val ssBytes = acquire(segmentSummarySize)
-    SegmentSummary.write(ssBytes,segmentSummary)
+                    segmentSummary: ByteBuffer): Future[Response] = {
+    flow.debug(s"Updating summary for segment $segmentId with old version $oldVersion and new version $newVersion")
+
     val updateQuery = update.where(_.dataset eqs projection.dataset)
       .and(_.projectionId eqs projection.id)
       .and(_.partition eqs partition)
       .and(_.segmentId eqs segmentId)
       .modify(_.segmentVersion setTo newVersion)
-      .and(_.chunkSummaries setTo ssBytes)
+      .and(_.chunkSummaries setTo segmentSummary)
       .onlyIf(_.segmentVersion is oldVersion)
-    updateQuery.future.map { f =>
-      release(ssBytes)
-      f
-    }.toResponse()
+    updateQuery.future.toResponse()
   }
 
   def insertSummary(projection: Projection,
                     partition: ByteBuffer,
                     segmentId: String,
                     segmentVersion: UUID,
-                    segmentSummary: SegmentSummary): Future[Response] = {
-    val segmentSummarySize = segmentSummary.size
-    metrics.debug(s"Acquiring buffer of size $segmentSummarySize for SegmentSummary")
-    val ssBytes = acquire(segmentSummarySize)
-    SegmentSummary.write(ssBytes,segmentSummary)
+                    segmentSummary: ByteBuffer): Future[Response] = {
+    flow.debug(s"Inserting summary for segment $segmentId with new version $segmentVersion")
     insert.value(_.dataset, projection.dataset)
       .value(_.projectionId, projection.id)
       .value(_.partition, partition)
       .value(_.segmentId, segmentId)
       .value(_.segmentVersion, segmentVersion)
-      .value(_.chunkSummaries, ssBytes)
-      .ifNotExists().future().map { f =>
-      release(ssBytes)
-      f
-    }.toResponse()
+      .value(_.chunkSummaries, segmentSummary).future().toResponse()
   }
 
 

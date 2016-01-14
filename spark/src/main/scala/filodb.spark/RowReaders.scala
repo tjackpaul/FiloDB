@@ -24,8 +24,9 @@ class SparkRowReader(chunks: Array[ByteBuffer],
 }
 
 class RddRowReader extends RowReader {
+  // scalastyle:off
   var row: Row = null
-
+  // scalastyle:on
   def notNull(columnNo: Int): Boolean = !row.isNullAt(columnNo)
 
   def getBoolean(columnNo: Int): Boolean = row.getBoolean(columnNo)

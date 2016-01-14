@@ -1,13 +1,14 @@
 package filodb.core.store
 
-import java.net.InetAddress
 import java.util.UUID
 
 import filodb.core.Types._
 import filodb.core.metadata._
 import filodb.core.query.Dataflow.RowReaderFactory
-import filodb.core.query.{ScanSplit, Dataflow, ScanInfo, SegmentScan}
+import filodb.core.query.{Dataflow, ScanInfo, ScanSplit, SegmentScan}
 import filodb.core.reprojector.Reprojector.SegmentFlush
+import filodb.core.util.FiloLogging
+import scodec.bits.ByteVector
 
 import scala.concurrent.Future
 
@@ -27,6 +28,8 @@ trait ChunkStore {
   protected def getChunks(scanInfo: ScanInfo)
   : Future[Seq[((Any, Any), Seq[ChunkWithMeta])]]
 
+
+  protected def deleteProjectionData(projection: Projection): Future[Boolean]
 }
 
 trait SummaryStore {
@@ -47,7 +50,9 @@ trait SummaryStore {
                                    segment: Any)
   : Future[Option[(SegmentVersion, SegmentSummary)]]
 
-  protected def newVersion: SegmentVersion
+  protected def getNewSegmentVersion: SegmentVersion
+
+  protected def nextChunkId(segment: Any): ChunkId
 
 }
 
@@ -56,24 +61,24 @@ trait QueryApi {
   def getScanSplits(splitCount: Int,
                     splitSize: Long,
                     projection: Projection,
-                    columns:Seq[ColumnId],
+                    columns: Seq[ColumnId],
                     partition: Option[Any] = None,
                     segmentRange: Option[KeyRange[_]] = None): Future[Seq[ScanSplit]]
 
 }
 
-trait ColumnStore {
+trait ColumnStore extends FiloLogging{
   self: ChunkStore with SummaryStore with QueryApi =>
 
   import scala.concurrent.ExecutionContext.Implicits.global
 
 
-  def readSegments(scanInfo: ScanInfo)(implicit rowReaderFactory:RowReaderFactory): Future[Seq[Dataflow]] =
+  def readSegments(scanInfo: ScanInfo)(implicit rowReaderFactory: RowReaderFactory): Future[Seq[Dataflow]] =
     for {
       segmentData <- getChunks(scanInfo)
-      mapping = segmentData.map { case ((partitionKey, segmentId), data) =>
+      mapping = segmentData.map { case ((pk, segmentId), data) =>
         new SegmentScan(
-          DefaultSegment(scanInfo.projection, partitionKey, segmentId, data),
+          DefaultSegment(scanInfo.projection, pk, segmentId, data),
           scanInfo.columns)
       }
     } yield mapping
@@ -81,22 +86,31 @@ trait ColumnStore {
   /**
    * There is a particular thorny edge case where the summary is stored but the chunk is not.
    */
-  def flushToSegment(segmentFlush: SegmentFlush): Future[Boolean] = {
-    val projection: Projection =segmentFlush.projection
+  def flushToSegment(segmentFlush: SegmentFlush, calculateOverrides: Boolean = true): Future[Boolean] = {
+    val projection: Projection = segmentFlush.projection
     val partition: Any = segmentFlush.partition
     val segment: Any = segmentFlush.segment
+
+    val versionAndSummary = if (calculateOverrides) {
+      getVersionAndSummaryWithDefaults(projection, partition, segment)
+    } else {
+      // when not calculating overrides
+      Future((None, DefaultSegmentSummary(projection.keyType, None)))
+    }
     for {
     // first get version and summary for this segment
-      (oldVersion, segmentSummary) <- getVersionAndSummaryWithDefaults(projection, partition, segment)
+      (oldVersion, segmentSummary) <- versionAndSummary
       // make a new chunk using this version of summary from the flush
       newChunk <- newChunkFromSummary(projection, partition, segment, segmentFlush, segmentSummary)
       // now make a new summary with keys from the new flush and the new chunk id
       newSummary = segmentSummary.withKeys(newChunk.chunkId, segmentFlush.keys)
+      newVersion = getNewSegmentVersion
       // Compare and swap the new summary and chunk if the version stayed the same
       result <- compareAndSwapSummaryAndChunk(projection, partition, segment,
         oldVersion, newVersion, newChunk, newSummary)
 
     } yield result
+
   }
 
   protected[store] def compareAndSwapSummaryAndChunk(projection: Projection,
@@ -134,7 +148,7 @@ trait ColumnStore {
                                          segment: Any,
                                          segmentFlush: SegmentFlush,
                                          segmentSummary: SegmentSummary) = {
-    val chunkId = segmentSummary.nextChunkId
+    val chunkId = nextChunkId(segment)
     val possibleOverrides = segmentSummary.possibleOverrides(segmentFlush.keys)
     for {
       possiblyOverriddenChunks <- possibleOverrides.map { o =>

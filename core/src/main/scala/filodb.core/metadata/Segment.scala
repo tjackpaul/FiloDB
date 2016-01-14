@@ -36,4 +36,6 @@ trait Segment {
 case class DefaultSegment(projection: Projection,
                           partition: Any,
                           segmentId: Any,
-                          chunks: Seq[ChunkWithMeta]) extends Segment
+                          chunks: Seq[ChunkWithMeta]) extends Segment{
+  override def toString: String = s"Partition($partition) Segment($segmentId) chunks($numChunks) rows($numRows)"
+}

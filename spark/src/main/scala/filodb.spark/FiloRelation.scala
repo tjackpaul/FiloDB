@@ -31,7 +31,7 @@ case class FiloRelation(dataset: String,
 
   val sc = sqlContext.sparkContext
   Filo.init(configFromSpark(sc))
-  val datasetObj = Filo.getDatasetObj(dataset)
+  val datasetObj = Filo.getDatasetObj(dataset).getOrElse(throw DatasetNotFound(dataset))
   val filoSchema = Filo.getSchema(dataset, version)
   val superProjection = datasetObj.superProjection
   val partitionColumns = datasetObj.partitionColumns

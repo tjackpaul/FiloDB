@@ -4,7 +4,7 @@ import akka.actor.{ActorRef, ActorSystem, Props}
 import com.typesafe.config.Config
 import filodb.cassandra.FiloCassandraConnector
 import filodb.core.metadata.Column
-import filodb.core.store.Dataset
+import filodb.core.store.{Dataset, ProjectionInfo}
 
 import scala.concurrent.duration._
 import scala.concurrent.{Await, Future}
@@ -31,8 +31,22 @@ object Filo extends Serializable {
 
   // scalastyle:on
 
-  def getDatasetObj(dataset: String): Dataset =
-    Filo.parse(metaStore.getDataset(dataset)) { ds => ds.get }
+  def getDatasetObj(dataset: String): Option[Dataset] =
+    Filo.parse(metaStore.getDataset(dataset)) { ds => ds }
+
+  def deleteDataset(datasetObj: Dataset): Unit = {
+    datasetObj.projections.foreach { projection =>
+      Filo.parse(columnStore.deleteProjectionData(projection)) { r => r }
+      Filo.parse(
+        metaStore.deleteDataset(datasetObj.name, Some(projection.id))
+      ) { ds => ds }
+    }
+  }
+
+  def addProjection(projectionInfo: ProjectionInfo): Boolean = {
+    Filo.parse(metaStore.addProjection(projectionInfo)) { ds => ds }
+  }
+
 
   def getSchema(dataset: String, version: Int): Seq[Column] =
     Filo.parse(metaStore.getSchema(dataset)) { schema => schema }
@@ -42,11 +56,5 @@ object Filo extends Serializable {
   }
 
   def newActor(props: Props): ActorRef = system.actorOf(props)
-
-  def memoryCheck(minFreeMB: Int) = () => getRealFreeMb > minFreeMB
-
-  private def getRealFreeMb: Int =
-    ((sys.runtime.maxMemory - (sys.runtime.totalMemory - sys.runtime.freeMemory)) / (1024 * 1024)).toInt
-
 
 }

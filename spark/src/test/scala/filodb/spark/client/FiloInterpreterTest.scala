@@ -22,18 +22,22 @@ class FiloInterpreterTest extends CassandraTest {
     FiloInterpreter.init(sc)
   }
 
+
+
   override def afterAll(): Unit = {
     super.afterAll()
     Filo.parse(Filo.columnStore.clearAll)(x=>x)
     Filo.parse(Filo.metaStore.clearAll)(x=>x)
     FiloInterpreter.stop()
   }
-
+  val loader = Thread.currentThread().getContextClassLoader()
+  val file = loader.getResource("filoData.json").getPath
   implicit val ec = Filo.executionContext
 
-  val createTable = "CREATE TABLE jsonds (id long,sqlDate string," +
+  def createTable(name:String) = s"CREATE TABLE $name (id long,sqlDate string," +
     "monthYear long,year long) PRIMARY KEY (id) " +
     "PARTITION BY (year) SEGMENT BY (monthYear)"
+
 
   val createTableWithoutParition = "CREATE TABLE jsonds (id long,sqlDate string," +
     "monthYear long,year long) PRIMARY KEY (id) " +
@@ -47,21 +51,21 @@ class FiloInterpreterTest extends CassandraTest {
     "monthYear long,year long) PRIMARY KEY (id) " +
     "PARTITION BY (year)"
 
-  val loadTableWithoutFormat = "LOAD './src/test/resources/filoData.json' INTO jsonds"
+  val loadTableWithoutFormat = s"LOAD '$file' INTO jsonds"
 
-  val loadTable = "LOAD './src/test/resources/filoData.json' INTO jsonds WITH FORMAT 'json'"
+  def loadTable(name:String) = s"LOAD '$file' INTO $name WITH FORMAT 'json'"
 
-  val loadTableWithOptions = "LOAD './src/test/resources/filoData.json' INTO jsonds WITH FORMAT 'json' WITH OPTIONS " +
+  def loadTableWithOptions(name:String) = s"LOAD '$file' INTO $name WITH FORMAT 'json' WITH OPTIONS " +
     "('samplingRatio':'1.0' )"
 
   val showTables = "SHOW TABLES"
 
-  val describeTable = "DESCRIBE TABLE jsonds"
+  def describeTable(name:String) = s"DESCRIBE TABLE $name"
 
-  val describeProjection = "DESCRIBE PROJECTION jsonds 0"
+  def describeProjection(name:String) = s"DESCRIBE PROJECTION $name 0"
 
   it("should parse create statement properly") {
-    val create = SimpleParser.parseCreate(createTable)
+    val create = SimpleParser.parseCreate(createTable("jsonds"))
     create.partitionCols should contain theSameElementsAs Seq("year")
     create.primaryCols should contain theSameElementsAs Seq("id")
     create.segmentCols should contain theSameElementsAs Seq("monthYear")
@@ -71,30 +75,30 @@ class FiloInterpreterTest extends CassandraTest {
   }
 
   it("should parse load statement properly") {
-    val load = SimpleParser.parseLoad(loadTableWithOptions)
+    val load = SimpleParser.parseLoad(loadTableWithOptions("jsonds8"))
     load.format should be("json")
-    load.tableName should be("jsonds")
-    load.url should be("./src/test/resources/filoData.json")
+    load.tableName should be("jsonds8")
+    load.url should be(file)
     val options = Map("samplingRatio" -> "1.0")
     load.options should contain theSameElementsAs options
   }
 
   it("should write table to a Filo table and read from it") {
-    val dfCreate = FiloInterpreter.interpret(createTable)
+    val dfCreate = FiloInterpreter.interpret(createTable("jsonds3"))
     dfCreate.count() should be(1)
     dfCreate.columns.mkString(",") should be("Filo-status")
     dfCreate.collect().head.mkString(",") should be("1")
-    val dfLoad = FiloInterpreter.interpret(loadTable)
+    val dfLoad = FiloInterpreter.interpret(loadTable("jsonds3"))
     dfLoad.count() should be(1)
     dfLoad.columns.mkString(",") should be("Filo-status")
     dfLoad.collect().head.mkString(",") should be("1")
     // Now read stuff back and ensure it got written
-    val df = FiloInterpreter.interpret("select id,sqlDate from jsonds")
-    df.count() should be(3)
+    val df = FiloInterpreter.interpret("select id,sqlDate from jsonds3")
     print(FiloInterpreter.dfToString(df, 20))
-    val df2 = FiloInterpreter.interpret("select * from jsonds")
-    df2.count() should be(3)
+    df.count() should be(3)
+    val df2 = FiloInterpreter.interpret("select * from jsonds3")
     print(FiloInterpreter.dfToString(df2, 20))
+    df2.count() should be(3)
   }
 
   it("should not read when partition key is not specified") {
@@ -123,41 +127,41 @@ class FiloInterpreterTest extends CassandraTest {
   }
 
   it("should read options in load statement when specified") {
-    val dfCreate = FiloInterpreter.interpret(createTable)
+    val dfCreate = FiloInterpreter.interpret(createTable("jsonds4"))
     dfCreate.count() should be(1)
     dfCreate.columns.mkString(",") should be("Filo-status")
     dfCreate.collect().head.mkString(",") should be("1")
-    val dfLoad = FiloInterpreter.interpret(loadTableWithOptions)
+    val dfLoad = FiloInterpreter.interpret(loadTableWithOptions("jsonds4"))
     dfLoad.count() should be(1)
     dfLoad.columns.mkString(",") should be("Filo-status")
     dfLoad.collect().head.mkString(",") should be("1")
     // Now read stuff back and ensure it got written
-    val df = FiloInterpreter.interpret("select id,sqlDate from jsonds")
+    val df = FiloInterpreter.interpret("select id,sqlDate from jsonds4")
     df.count() should be(3)
     print(FiloInterpreter.dfToString(df, 20))
-    val df2 = FiloInterpreter.interpret("select * from jsonds")
+    val df2 = FiloInterpreter.interpret("select * from jsonds4")
     df2.count() should be(3)
     print(FiloInterpreter.dfToString(df2, 20))
   }
 
   it("should show tables when specified") {
-    FiloInterpreter.interpret(createTable)
-    FiloInterpreter.interpret(loadTable)
+    FiloInterpreter.interpret(createTable("jsonds5"))
+    FiloInterpreter.interpret(loadTable("jsonds5"))
     val df = FiloInterpreter.interpret(showTables)
     print(FiloInterpreter.dfToString(df, 20))
   }
 
   it("it should describe table when specified") {
-    FiloInterpreter.interpret(createTable)
-    FiloInterpreter.interpret(loadTable)
-    val df = FiloInterpreter.interpret(describeTable)
+    FiloInterpreter.interpret(createTable("jsonds6"))
+    FiloInterpreter.interpret(loadTable("jsonds6"))
+    val df = FiloInterpreter.interpret(describeTable("jsonds6"))
     print(FiloInterpreter.dfToString(df, 20))
   }
 
   it("it should describe projection when specified") {
-    FiloInterpreter.interpret(createTable)
-    FiloInterpreter.interpret(loadTable)
-    val df = FiloInterpreter.interpret(describeProjection)
+    FiloInterpreter.interpret(createTable("jsonds7"))
+    FiloInterpreter.interpret(loadTable("jsonds7"))
+    val df = FiloInterpreter.interpret(describeProjection("jsonds7"))
     print(FiloInterpreter.dfToString(df, 20))
   }
 

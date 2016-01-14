@@ -86,8 +86,17 @@ sealed class ProjectionTable(ks: KeySpace, _session: Session)
     select.where(_.dataset eqs dataset).fetch()
   }
 
-  def getAllSuperProjectionNames: Future[Seq[String]] ={
-    select.where(_.projectionId eqs 0).allowFiltering().fetch().map(list => list map(info => info.dataset))
+  def getAllSuperProjectionNames: Future[Seq[String]] = {
+    select.where(_.projectionId eqs 0).allowFiltering().fetch().map(list => list map (info => info.dataset))
+  }
+
+  def deleteDataset(dataset: String, projectionId: Option[Int] = None): Future[Response] = {
+    val query = delete().where(_.dataset eqs dataset)
+    val finalQuery = projectionId match {
+      case Some(id) => query.and(_.projectionId eqs id)
+      case None => query
+    }
+    finalQuery.future.toResponse()
   }
 
 }
