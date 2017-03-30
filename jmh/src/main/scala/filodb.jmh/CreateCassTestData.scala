@@ -3,7 +3,7 @@ package filodb.jmh
 import org.apache.spark.sql.{DataFrame, SQLContext, SaveMode}
 import org.apache.spark.{SparkConf, SparkContext, SparkException}
 
-import filodb.spark.FiloDriver
+import filodb.spark.{FiloDriver, FiloExecutor}
 
 /**
  * Creates Cassandra test data for the SparkReadBenchmark.  Note that only 1 partition
@@ -17,6 +17,7 @@ object CreateCassTestData extends App {
                             .setAppName("test")
                             .set("filodb.cassandra.keyspace", "filodb")
                             .set("filodb.memtable.min-free-mb", "10")
+                            .set("spark.ui.enabled", "false")
                             .set("spark.driver.memory", "3g")
                             .set("spark.executor.memory", "5g")
   val sc = new SparkContext(conf)
@@ -45,5 +46,6 @@ object CreateCassTestData extends App {
 
   sc.stop()
   FiloDriver.shutdown()
+  FiloExecutor.shutdown()
   sys.exit(0)
 }

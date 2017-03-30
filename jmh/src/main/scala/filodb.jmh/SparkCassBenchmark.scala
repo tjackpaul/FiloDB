@@ -17,7 +17,7 @@ import scalaxy.loops._
 import filodb.core._
 import filodb.core.metadata.{Column, Dataset, RichProjection}
 import filodb.core.store.InMemoryColumnStore
-import filodb.spark.{SparkRowReader, TypeConverters, FiloDriver}
+import filodb.spark.{SparkRowReader, FiloDriver, FiloExecutor, TypeConverters}
 
 // Spark CassandraColumnStore benchmark
 // NOTE: before running this test, MUST do sbt jmh/run on CreateCassTestData to populate
@@ -29,7 +29,7 @@ class SparkCassBenchmark {
   // Now create an RDD[Row] out of it, and a Schema, -> DataFrame
   val conf = (new SparkConf).setMaster("local[4]")
                             .setAppName("test")
-                            // .set("spark.sql.tungsten.enabled", "false")
+                            .set("spark.ui.enabled", "false")
                             .set("spark.filodb.cassandra.keyspace", "filodb")
   val sc = new SparkContext(conf)
   val sql = new SQLContext(sc)
@@ -40,6 +40,7 @@ class SparkCassBenchmark {
   @TearDown
   def shutdownFiloActors(): Unit = {
     FiloDriver.shutdown()
+    FiloExecutor.shutdown()
     sc.stop()
   }
 
